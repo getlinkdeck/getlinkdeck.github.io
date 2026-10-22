@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>LinkDeck – Sammlung</title>
+<!--
+  Web-Ansicht öffentlicher LinkDeck-Sammlungen.
+  GitHub Pages liefert diese Seite für jede unbekannte Adresse aus – also auch für /c/<slug>.
+  Die Sammlung wird nur lesend aus der öffentlichen CloudKit-Datenbank geladen.
+  Format des Inhalts: siehe LinkDeck/Support/PublicCollections/PublicCollectionPayload.swift.
+-->
+<style>
+:root { --bg:#ffffff; --fg:#1d1d1f; --muted:#6e6e73; --accent:#5b4ee6; --card:#f5f5f7; --line:#e5e5ea; }
+@media (prefers-color-scheme: dark) { :root { --bg:#000000; --fg:#f5f5f7; --muted:#a1a1a6; --accent:#8f86ff; --card:#1c1c1e; --line:#2c2c2e; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.5 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width:760px; margin:0 auto; padding:32px 16px 64px; }
+a { color:var(--accent); }
+.brand { font-weight:600; color:var(--muted); text-decoration:none; font-size:15px; }
+h1 { font-size:32px; line-height:1.15; margin:16px 0 4px; overflow-wrap:anywhere; }
+.muted { color:var(--muted); }
+.summary { margin:12px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.actions { display:flex; gap:12px; flex-wrap:wrap; margin:24px 0 8px; }
+.button { display:inline-block; padding:12px 20px; border-radius:12px; font-weight:600; text-decoration:none; background:var(--card); color:var(--fg); }
+.button.primary { background:var(--accent); color:#fff; }
+.hint { font-size:14px; color:var(--muted); margin:4px 0 0; }
+details { margin:8px 0; }
+details > summary { cursor:pointer; font-weight:600; font-size:19px; padding:8px 0; list-style-position:outside; }
+details details { margin-left:16px; }
+details details > summary { font-size:17px; }
+ul.links { list-style:none; margin:0; padding:0; }
+ul.links li { background:var(--card); border-radius:12px; padding:12px 16px; margin:8px 0; overflow-wrap:anywhere; }
+.link-title { font-weight:600; text-decoration:none; }
+.domain { font-size:14px; color:var(--muted); }
+.note { margin:6px 0 0; white-space:pre-wrap; }
+pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; overflow-x:auto; font-size:14px; margin:8px 0 0; white-space:pre-wrap; }
+.tags { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+.tag { font-size:13px; background:var(--bg); border:1px solid var(--line); border-radius:999px; padding:1px 8px; color:var(--muted); }
+.related { font-size:14px; margin-top:6px; }
+.related a { margin-right:12px; }
+footer { margin-top:48px; padding-top:16px; border-top:1px solid var(--line); font-size:14px; color:var(--muted); display:flex; gap:16px; flex-wrap:wrap; }
+.state { text-align:center; padding:64px 0; }
+</style>
+</head>
+<body>
+<main>
+  <a class="brand" href="/linkdeck-site/">LinkDeck</a>
+  <div id="app"><p class="state muted" id="loading">…</p></div>
+  <footer id="footer"></footer>
+</main>
+<script>
+"use strict";
+// ---- Einstellungen (beim Umzug auf eine eigene Domain bleibt hier alles gleich) ----
+const CONFIG = {
+  container: "iCloud.de.saschafronczek.LinkDeck",
+  // "development" zum Testen, nach dem Schema-Deploy "production".
+  environment: "development",
+  // Nur lesender API-Token aus der CloudKit-Konsole (Tokens & Keys → API Tokens).
+  apiToken: "REPLACE_WITH_CLOUDKIT_API_TOKEN",
+  appStoreURL: "/linkdeck-site/",
+  contactEmail: "linkdeck@saschafronczek.de",
+  privacyURL: "/linkdeck-site/privacy.html"
+};
+
+const isGerman = (navigator.language || "de").toLowerCase().startsWith("de");
+const T = isGerman ? {
+  loading: "Sammlung wird geladen …",
+  notFound: "Diese Sammlung ist nicht mehr verfügbar.",
+  notFoundTitle: "Nicht verfügbar",
+  error: "Die Sammlung konnte nicht geladen werden. Bitte versuche es später noch einmal.",
+  pageNotFound: "Diese Seite gibt es nicht.",
+  by: "von",
+  counts: (l, f) => `${l} Links · ${f} Unterordner`,
+  open: "In LinkDeck übernehmen",
+  get: "LinkDeck laden",
+  hint: "Mit LinkDeck übernimmst du die ganze Sammlung mit allen Ordnern – gratis.",
+  report: "Melden",
+  privacy: "Datenschutz",
+  made: "Erstellt mit LinkDeck"
+} : {
+  loading: "Loading collection…",
+  notFound: "This collection is no longer available.",
+  notFoundTitle: "Not available",
+  error: "The collection could not be loaded. Please try again later.",
+  pageNotFound: "This page doesn’t exist.",
+  by: "by",
+  counts: (l, f) => `${l} links · ${f} subfolders`,
+  open: "Add to LinkDeck",
+  get: "Get LinkDeck",
+  hint: "LinkDeck saves the whole collection with all folders – for free.",
+  report: "Report",
+  privacy: "Privacy",
+  made: "Made with LinkDeck"
+};
+document.documentElement.lang = isGerman ? "de" : "en";
+
+const app = document.getElementById("app");
+document.getElementById("loading").textContent = T.loading;
+
+// Kleine Helfer: Inhalte immer als Text einfügen, nie als HTML.
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value !== undefined && value !== null) node.setAttribute(key, value);
+  }
+  for (const child of children) {
+    if (child === null || child === undefined || child === "") continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+function safeURL(text) {
+  try {
+    const url = new URL(text);
+    return (url.protocol === "https:" || url.protocol === "http:") ? url.href : null;
+  } catch { return null; }
+}
+function domain(text) {
+  try { return new URL(text).hostname.replace(/^www\./, ""); } catch { return text; }
+}
+
+function showState(title, message) {
+  app.replaceChildren(el("div", { class: "state" }, el("h1", {}, title), el("p", { class: "muted" }, message)));
+}
+
+function renderFooter(slug) {
+  const footer = document.getElementById("footer");
+  const items = [];
+  if (slug) {
+    const subject = encodeURIComponent(`LinkDeck – Report ${slug}`);
+    const body = encodeURIComponent(`${location.origin}/c/${slug}\n\n`);
+    items.push(el("a", { href: `mailto:${CONFIG.contactEmail}?subject=${subject}&body=${body}` }, T.report));
+  }
+  items.push(el("a", { href: CONFIG.privacyURL }, T.privacy));
+  items.push(el("span", {}, T.made));
+  footer.replaceChildren(...items);
+}
+
+function renderLink(link) {
+  const href = safeURL(link.url);
+  const title = (link.title || "").trim() || domain(link.url);
+  const item = el("li", {},
+    href ? el("a", { class: "link-title", href, target: "_blank", rel: "noopener noreferrer nofollow ugc" }, title)
+         : el("span", { class: "link-title" }, title),
+    el("div", { class: "domain" }, domain(link.url))
+  );
+  if (link.note) item.append(el("p", { class: "note" }, link.note));
+  if (link.code) item.append(el("pre", {}, el("code", {}, link.code)));
+  if (link.tags && link.tags.length) {
+    item.append(el("div", { class: "tags" }, ...link.tags.map(tag => el("span", { class: "tag" }, "#" + tag))));
+  }
+  if (link.related && link.related.length) {
+    const related = el("div", { class: "related" });
+    for (const r of link.related) {
+      const rHref = safeURL(r.url);
+      if (rHref) related.append(el("a", { href: rHref, target: "_blank", rel: "noopener noreferrer nofollow ugc" }, r.label || domain(r.url)));
+    }
+    item.append(related);
+  }
+  return item;
+}
+
+function renderFolderContent(node, container, depth) {
+  if (depth > 32) return;
+  if (node.links && node.links.length) {
+    container.append(el("ul", { class: "links" }, ...node.links.map(renderLink)));
+  }
+  for (const child of node.folders || []) {
+    const details = el("details", { open: "" }, el("summary", {}, child.name));
+    renderFolderContent(child, details, depth + 1);
+    container.append(details);
+  }
+}
+
+function countLinks(node) {
+  return (node.links || []).length + (node.folders || []).reduce((sum, f) => sum + countLinks(f), 0);
+}
+function countFolders(node) {
+  return (node.folders || []).reduce((sum, f) => sum + 1 + countFolders(f), 0);
+}
+
+function render(slug, fields) {
+  const payload = JSON.parse(fields.payload.value);
+  const title = (fields.title && fields.title.value) || payload.root.name;
+  const author = fields.authorName && fields.authorName.value;
+  const summary = fields.summary && fields.summary.value;
+  document.title = `${title} – LinkDeck`;
+
+  const header = el("header", {},
+    el("h1", {}, title),
+    author ? el("div", { class: "muted" }, `${T.by} ${author}`) : null,
+    summary ? el("p", { class: "summary" }, summary) : null,
+    el("p", { class: "hint" }, T.counts(countLinks(payload.root), countFolders(payload.root))),
+    el("div", { class: "actions" },
+      el("a", { class: "button primary", href: `linkdeck://c/${slug}` }, T.open),
+      el("a", { class: "button", href: CONFIG.appStoreURL }, T.get)
+    ),
+    el("p", { class: "hint" }, T.hint)
+  );
+  const content = el("section", {});
+  renderFolderContent(payload.root, content, 0);
+  app.replaceChildren(header, content);
+}
+
+async function load(slug) {
+  const url = `https://api.apple-cloudkit.com/database/1/${CONFIG.container}/${CONFIG.environment}/public/records/lookup?ckAPIToken=${encodeURIComponent(CONFIG.apiToken)}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      records: [{ recordName: slug }],
+      desiredKeys: ["title", "summary", "authorName", "payload", "isHidden", "format"]
+    })
+  });
+  if (!response.ok) throw new Error("HTTP " + response.status);
+  const data = await response.json();
+  const record = data.records && data.records[0];
+  if (!record || record.serverErrorCode) {
+    if (record && record.serverErrorCode !== "NOT_FOUND") throw new Error(record.serverErrorCode);
+    return null;
+  }
+  const fields = record.fields || {};
+  if (fields.isHidden && fields.isHidden.value) return null;
+  if (!fields.payload) return null;
+  return fields;
+}
+
+(async () => {
+  const match = location.pathname.match(/^\/c\/([a-z0-9]{4,32})\/?$/i);
+  if (!match) {
+    renderFooter(null);
+    showState("404", T.pageNotFound);
+    return;
+  }
+  const slug = match[1].toLowerCase();
+  renderFooter(slug);
+  try {
+    const fields = await load(slug);
+    if (!fields) { showState(T.notFoundTitle, T.notFound); return; }
+    render(slug, fields);
+  } catch (error) {
+    console.error(error);
+    showState(T.notFoundTitle, T.error);
+  }
+})();
+</script>
+</body>
+</html>
