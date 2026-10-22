@@ -1,0 +1,12 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["MSSRC3M84Y.de.saschafronczek.LinkDeck"],
+        "components": [
+          { "/": "/c/*", "comment": "Öffentliche LinkDeck-Sammlungen" }
+        ]
+      }
+    ]
+  }
+}
