@@ -208,7 +208,7 @@ async function load(slug) {
   const url = `https://api.apple-cloudkit.com/database/1/${CONFIG.container}/${CONFIG.environment}/public/records/lookup?ckAPIToken=${encodeURIComponent(CONFIG.apiToken)}`;
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // Kein eigener Content-Type-Header: CloudKit erlaubt ihn bei Anfragen aus dem Browser nicht (CORS).
     body: JSON.stringify({
       records: [{ recordName: slug }],
       desiredKeys: ["title", "summary", "authorName", "payload", "isHidden", "format"]
